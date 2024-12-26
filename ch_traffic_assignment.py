@@ -446,6 +446,47 @@ def DijkstraHeap(origin, network: FlowTransportNetwork):
                 network.nodeSet[newNode].label = newLabel
                 network.nodeSet[newNode].pred = newPred
 
+# heuristic эвристическая функция, возвращающая оценку стоимости
+# пути от узла до цели
+def heuristic(node, target):
+    # Пример: манхэттенское расстояние, если узлы имеют координаты
+    return abs(node.x - target.x) + abs(node.y - target.y)
+
+def AStarHeap(origin, target, network: FlowTransportNetwork):
+    for n in network.nodeSet:
+        network.nodeSet[n].label = np.inf
+        network.nodeSet[n].pred = None
+    
+    network.nodeSet[origin].label = 0.0
+    network.nodeSet[origin].pred = None
+    
+    # SE чередь с приоритетами
+    SE = [(0 + heuristic(network.nodeSet[origin], network.nodeSet[target]), origin)]
+    
+    while SE:
+        currentNode = heapq.heappop(SE)[1]
+        
+        # Если достигли целевой вершины, завершаем
+        if currentNode == target:
+            break
+        
+        currentLabel = network.nodeSet[currentNode].label
+        
+        for toNode in network.nodeSet[currentNode].outLinks:
+            link = (currentNode, toNode)
+            newNode = toNode
+            newPred = currentNode
+            existingLabel = network.nodeSet[newNode].label
+            newLabel = currentLabel + network.linkSet[link].cost
+            
+            # Добавляем эвристику к общей стоимости
+            f_cost = newLabel + heuristic(network.nodeSet[newNode], network.nodeSet[target])
+            
+            if newLabel < existingLabel:
+                heapq.heappush(SE, (f_cost, newNode))
+                network.nodeSet[newNode].label = newLabel
+                network.nodeSet[newNode].pred = newPred
+
 def BPRcostFunction(optimal: bool,
                     fft: float,
                     alpha: float,

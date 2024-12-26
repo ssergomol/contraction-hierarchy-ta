@@ -3,9 +3,6 @@ import time
 import numpy as np
 
 
-import networkx as nx
-
-
 from ch_traffic_assignment import DijkstraHeap, AStarHeap
 
 

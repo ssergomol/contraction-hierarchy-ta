@@ -713,7 +713,7 @@ def assignment_loop(network: FlowTransportNetwork,
     TSTT = np.inf
     assignmentStartTime = time.time()
     while gap > accuracy:
-        network.preprocess()
+        # network.preprocess()
         _, x_bar = loadAON(network=network)
         if algorithm == "MSA" or iteration_number == 1:
             alpha = (1 / iteration_number)

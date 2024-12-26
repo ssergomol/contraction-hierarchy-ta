@@ -460,7 +460,7 @@ def AStarHeap(origin, target, network: FlowTransportNetwork):
     network.nodeSet[origin].label = 0.0
     network.nodeSet[origin].pred = None
     
-    # SE очередь с приоритетами
+    # SE чередь с приоритетами
     SE = [(0 + heuristic(network.nodeSet[origin], network.nodeSet[target]), origin)]
     
     while SE:

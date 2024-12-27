@@ -12,7 +12,6 @@ import heapq
 import math
 import numpy as np
 import networkx as nx
-from collections import defaultdict
 
 import networkx as nx
 import numpy as np
@@ -216,7 +215,7 @@ class FlowTransportNetwork:
 
         print('Preprocess Done!')
 
-    def bidirectional_dijkstra_CH_old(self, source_node: str, target_node: str):
+    def bidirectional_dijkstra_CH(self, source_node: str, target_node: str):
         """
         Performs a bidirectional Dijkstra search on the FlowTransportNetwork,
         respecting contraction hierarchy order (`self.order_of`) to skip nodes,
@@ -337,144 +336,6 @@ class FlowTransportNetwork:
         path2.append(cur_node)
 
         shortest_path = path1 + path2
-
-        return shortest_time, shortest_path
-    
-    def bidirectional_dijkstra_CH(self, source_node: str, target_node: str):
-        """
-        Performs a bidirectional Dijkstra search on the FlowTransportNetwork,
-        respecting contraction hierarchy order (`self.order_of`) to skip nodes,
-        and also supporting the reconstruction of shortcuts.
-
-        Returns a tuple (shortest_time, shortest_path):
-        - shortest_time: the total cost/distance from source_node to target_node
-        - shortest_path: list of nodes representing the route from source_node to target_node
-                        (including any necessary shortcut expansions)
-        """
-
-        vertices = list(self.nodeSet.keys())
-
-        for n in vertices:
-            self.nodeSet[n].label = math.inf
-            self.nodeSet[n].pred  = None
-
-        visited_start = set()
-        visited_end = set()
-
-        parents1 = {}
-        parents2 = {}
-
-        dist1 = {v: math.inf for v in vertices}
-        dist2 = {v: math.inf for v in vertices}
-
-        parents1[source_node] = source_node
-        parents2[target_node] = target_node
-        dist1[source_node] = 0.0
-        dist2[target_node] = 0.0
-
-        self.nodeSet[source_node].label = 0.0
-        self.nodeSet[source_node].pred  = None  
-        self.nodeSet[target_node].label = 0.0
-        self.nodeSet[target_node].pred  = None  
-
-        pq_start = [(0.0, source_node)]
-        pq_end   = [(0.0, target_node)]
-
-        while pq_start or pq_end:
-            # ---------- Forward Step ----------
-            if pq_start:
-                current_dist, current_vertex = heapq.heappop(pq_start)
-                if current_vertex in visited_start:
-                    pass
-                else:
-                    visited_start.add(current_vertex)
-
-                    for neighbor in self.nodeSet[current_vertex].outLinks:
-                        if neighbor in self.order_of and current_vertex in self.order_of:
-                            if self.order_of[neighbor] <= self.order_of[current_vertex]:
-                                continue
-
-                        old_cost = dist1[neighbor]
-                        if (current_vertex, neighbor) not in self.times_all:
-                            continue
-                        new_cost = dist1[current_vertex] + self.times_all[(current_vertex, neighbor)]
-                        if new_cost < old_cost:
-                            dist1[neighbor] = new_cost
-                            parents1[neighbor] = current_vertex
-                            heapq.heappush(pq_start, (new_cost, neighbor))
-
-                            self.nodeSet[neighbor].label = new_cost
-                            self.nodeSet[neighbor].pred  = current_vertex
-
-            # ---------- Backward Step ----------
-            if pq_end:
-                current_dist, current_vertex = heapq.heappop(pq_end)
-                if current_vertex in visited_end:
-                    pass
-                else:
-                    visited_end.add(current_vertex)
-
-                    for neighbor in self.nodeSet[current_vertex].inLinks:
-                        if neighbor in self.order_of and current_vertex in self.order_of:
-                            if self.order_of[neighbor] <= self.order_of[current_vertex]:
-                                continue
-
-                        old_cost = dist2[neighbor]
-                        if (neighbor, current_vertex) not in self.times_all:
-                            continue
-                        new_cost = dist2[current_vertex] + self.times_all[(neighbor, current_vertex)]
-                        if new_cost < old_cost:
-                            dist2[neighbor] = new_cost
-                            parents2[neighbor] = current_vertex
-                            heapq.heappush(pq_end, (new_cost, neighbor))
-                    
-                    reachable_nodes = [v for v in vertices
-                        if dist1[v] != math.inf and dist2[v] != math.inf]
-        if not reachable_nodes:
-            return math.inf, []
-
-        shortest_time = math.inf
-        common_node = None
-        for v in reachable_nodes:
-            total_cost = dist1[v] + dist2[v]
-            if total_cost < shortest_time:
-                shortest_time = total_cost
-                common_node = v
-
-        if common_node is None:
-            return math.inf, []
-
-        path1 = []
-        cur_node = common_node
-        while parents1.get(cur_node, cur_node) != cur_node:
-            tmp_node = parents1[cur_node]
-            path_fragment = []
-            if (tmp_node, cur_node) in self.linkSet and hasattr(self.linkSet[(tmp_node, cur_node)], 'shortcut_node'):
-                if self.linkSet[(tmp_node, cur_node)].shortcut_node != 0:
-                    path_fragment = self._generate_shortcut(tmp_node, cur_node)
-
-            path1 = path_fragment + path1
-            path1 = [tmp_node] + path1
-            cur_node = tmp_node
-
-        path2 = []
-        cur_node = common_node
-        while parents2.get(cur_node, cur_node) != cur_node:
-            path2.append(cur_node)
-            tmp_node = parents2[cur_node]
-            path_fragment = []
-            if (cur_node, tmp_node) in self.linkSet and hasattr(self.linkSet[(cur_node, tmp_node)], 'shortcut_node'):
-                if self.linkSet[(cur_node, tmp_node)].shortcut_node != 0:
-                    path_fragment = self._generate_shortcut(cur_node, tmp_node)
-            path2 += path_fragment
-            cur_node = tmp_node
-        path2.append(cur_node)
-
-        shortest_path = path1 + path2
-
-
-        for v in dist1:
-            self.nodeSet[v].label = dist1[v]
 
         return shortest_time, shortest_path
     
@@ -875,18 +736,15 @@ def loadAON(network: FlowTransportNetwork, algo: str = "dijkstra", computeXbar: 
             for s in network.zoneSet[r].destList:
                 dem = network.tripSet[r, s].demand
                 if dem <= 0:
-                    continue  # Skip if there's no demand
+                    continue  
 
-                if algo == 'CH':
-                    shortest_time, shortest_path = network.bidirectional_dijkstra_CH_old(r, s)
+                shortest_time, shortest_path = network.bidirectional_dijkstra_CH_old(r, s)
 
                 if not shortest_path:
                     continue
 
                 SPTT += shortest_time * dem
-
                 if computeXbar and r != s:
-                    
                     if algo == 'CH':
                         for i in range(len(shortest_path) - 2, -1, -1):
                             link_tuple = (shortest_path[i], shortest_path[i+1])
@@ -1077,8 +935,6 @@ def assignment_loop(network: FlowTransportNetwork,
     TSTT = np.inf
     assignmentStartTime = time.time()
 
-    lastLinkSet = network.linkSet.copy()
-
     while gap > accuracy:
 
         _, x_bar = loadAON(network=network, algo=shortestPathAlgo)
@@ -1247,9 +1103,6 @@ def draw_and_save_graph(G, filename="graph.png", figsize=(8, 6), node_color='lig
     # plt.show()
 
 if __name__ == '__main__':
-
-    # This is an example usage for calculating System Optimal and User Equilibrium with Frank-Wolfe
-
     net_file = str(PathUtils.berlin_center_net_file)
 
     print("\nSystem Optimal\n")
@@ -1275,5 +1128,3 @@ if __name__ == '__main__':
 
     print("UE", total_system_travel_time_equilibrium)
     print("SO", total_system_travel_time_optimal)
-
-    # print("UE - SO = ", total_system_travel_time_equilibrium - total_system_travel_time_optimal)

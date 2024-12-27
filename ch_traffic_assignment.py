@@ -14,6 +14,11 @@ import numpy as np
 import networkx as nx
 from collections import defaultdict
 
+import networkx as nx
+import numpy as np
+import matplotlib.pyplot as plt
+
+
 class FlowTransportNetwork:
     def __init__(self):
         self.linkSet = {}
@@ -23,13 +28,12 @@ class FlowTransportNetwork:
         self.zoneSet = {}
         self.originZones = {}
 
-        # Optionally store a networkx version (if desired)
         self.networkx_graph = None
 
-        # --- Add these attributes for contraction hierarchy
-        self.order_of = {}      # node_id -> order index
-        self.node_order = {}    # order index -> node_id
-        self.times_all = {}     # dict of {(u, v): cost}, for referencing edge costs quickly
+    
+        self.order_of = {}  
+        self.node_order = {}    
+        self.times_all = {}    
 
     def to_networkx(self):
         """
@@ -50,9 +54,6 @@ class FlowTransportNetwork:
             link.reset()
             self.times_all[(link.init_node, link.term_node)] = link.fft
 
-    # ------------------------------------------------------------------------
-    # 1) local_dijkstra_without_v
-    # ------------------------------------------------------------------------
     def local_dijkstra_without_v(self, u: str, v: str, P_max: float):
         """
         A specialized Dijkstra that:
@@ -66,7 +67,6 @@ class FlowTransportNetwork:
         pq = [(0.0, u)]
         D = {x: math.inf for x in vertices}
 
-        # we do not want to expand 'v', so treat it as "visited" from the start
         visited.add(v)
         D[u] = 0.0
 
@@ -75,18 +75,14 @@ class FlowTransportNetwork:
             if n in visited:
                 continue
 
-            # If we exceed P_max, stop exploring deeper
             if cost > P_max:
                 break
 
             visited.add(n)
 
-            # For all neighbors n -> neighbor (i.e., outLinks):
             for neighbor in self.nodeSet[n].outLinks:
-                # If neighbor is already contracted, skip
                 if neighbor in self.order_of:
                     continue
-                # If we don't have an entry in times_all, skip
                 if (n, neighbor) not in self.linkSet:
                     continue
 
@@ -98,25 +94,20 @@ class FlowTransportNetwork:
 
         return D
 
-    # ------------------------------------------------------------------------
-    # 2) edge_difference
-    # ------------------------------------------------------------------------
+
     def edge_difference(self, v: str) -> int:
         """
         Calculates how many new shortcuts would be introduced if node v is contracted.
         Formula: -(outdeg + indeg) + (number of actual shortcuts)
         """
-        # Start with negative sum of outlinks + inlinks
         outdeg = len(self.nodeSet[v].outLinks)
         indeg = len(self.nodeSet[v].inLinks)
         dif = - outdeg - indeg
 
-        # For each predecessor u of v (but skip if u is contracted)
         for u in self.nodeSet[v].inLinks:
             if u in self.order_of:
                 continue
 
-            # Build a local dictionary P for all successors w of v
             P = {}
             for w in self.nodeSet[v].outLinks:
                 if w in self.order_of:
@@ -131,33 +122,25 @@ class FlowTransportNetwork:
             P_max = max(P.values())
             D = self.local_dijkstra_without_v(u, v, P_max)
 
-            # If the local D[w] is bigger than the direct sum P[w], it means we
-            # would need a shortcut for (u->w) to preserve optimal routes
             for w in P.keys():
                 if D[w] > P[w]:
                     dif += 1
 
         return dif
 
-    # ------------------------------------------------------------------------
-    # 3) get_node_order_edge_difference
-    # ------------------------------------------------------------------------
     def get_node_order_edge_difference(self):
         """
         Builds a priority queue of (edge_difference, nodeId) for all nodes in the network.
         """
         node_pq = []
         for v in self.nodeSet.keys():
-            # if node is already contracted, skip it
             if v in self.order_of:
                 continue
             dif = self.edge_difference(v)
             heapq.heappush(node_pq, (dif, v))
         return node_pq
 
-    # ------------------------------------------------------------------------
-    # 4) preprocess
-    # ------------------------------------------------------------------------
+
     def preprocess(self):
         """
         Main contraction-hierarchy preprocessing routine:
@@ -171,17 +154,13 @@ class FlowTransportNetwork:
         order = 0
 
         while node_pq:
-            # pop the top (lowest edge_difference) node
             _, v = heapq.heappop(node_pq)
 
-            # re-check difference to see if we must reinsert it (lazy priority queue approach)
             new_dif = self.edge_difference(v)
-            # if there's still a smaller difference on top, push v back
             if node_pq and new_dif > node_pq[0][0]:
                 heapq.heappush(node_pq, (new_dif, v))
                 continue
 
-            # We officially contract v
             order += 1
             if order % 500 == 0:
                 print(f"..........Contracting {order} nodes so far..........")
@@ -189,18 +168,14 @@ class FlowTransportNetwork:
             self.order_of[v] = order
             self.node_order[order] = v
 
-            # Create shortcuts for (u->w) if needed
             for u in self.nodeSet[v].inLinks:
-                # skip if u is already contracted
                 if u in self.order_of:
                     continue
 
-                # build cost to w via v
                 P = {}
                 for w in self.nodeSet[v].outLinks:
                     if w in self.order_of:
                         continue
-                    # skip if we have no cost data
                     if (u, v) not in self.linkSet or (v, w) not in self.linkSet:
                         continue
                     P[w] = self.linkSet[(u, v)].cost + self.linkSet[(v, w)].cost
@@ -211,16 +186,12 @@ class FlowTransportNetwork:
                 P_max = max(P.values())
                 D = self.local_dijkstra_without_v(u, v, P_max)
 
-                # For each possible w, if we need a shortcut (D[w] > P[w])
                 for w in P.keys():
                     if D[w] > P[w]:
-                        # If link (u->w) already exists, mark the shortcut_node
                         if (u, w) in self.linkSet:
                             self.linkSet[(u, w)].shortcut_node = v
                         else:
-                            # Create a brand-new link for (u->w)
-                            # Assign it arbitrary or minimal attributes. 
-                            # For instance, cost = P[w], or set FFT = cost, etc.
+                        
                             self.linkSet[(u, w)] = Link(
                                 init_node=u,
                                 term_node=w,
@@ -235,17 +206,15 @@ class FlowTransportNetwork:
                             )
                             self.linkSet[(u, w)].shortcut_node = v
 
-                            # Also update node sets
                             if w not in self.nodeSet[u].outLinks:
                                 self.nodeSet[u].outLinks.append(w)
                             if u not in self.nodeSet[w].inLinks:
                                 self.nodeSet[w].inLinks.append(u)
 
-                        # In any case, update self.times_all to reflect new cost
                         self.times_all[(u, w)] = P[w]
-                        self.linkSet[(u, v)].cost = P[w]
+                        self.linkSet[(u, w)].cost = P[w]
 
-        # print('Preprocess Done!')
+        print('Preprocess Done!')
 
     def bidirectional_dijkstra_CH_old(self, source_node: str, target_node: str):
         """
@@ -259,7 +228,6 @@ class FlowTransportNetwork:
                         (including any necessary shortcut expansions)
         """
 
-        # 1) Prepare data structures
         vertices = list(self.nodeSet.keys())
 
         visited_start = set()
@@ -271,7 +239,6 @@ class FlowTransportNetwork:
         dist1 = {v: math.inf for v in vertices}
         dist2 = {v: math.inf for v in vertices}
 
-        # 2) Initialize source/destination
         parents1[source_node] = source_node
         parents2[target_node] = target_node
         dist1[source_node] = 0.0
@@ -280,7 +247,6 @@ class FlowTransportNetwork:
         pq_start = [(0.0, source_node)]
         pq_end   = [(0.0, target_node)]
 
-        # 3) Bidirectional search
         while pq_start or pq_end:
             # ---------- Forward Step ----------
             if pq_start:
@@ -290,16 +256,13 @@ class FlowTransportNetwork:
                 else:
                     visited_start.add(current_vertex)
 
-                    # Relax edges forward
                     for neighbor in self.nodeSet[current_vertex].outLinks:
-                        # CH logic: skip neighbor if it's "contracted sooner" or same order
-                        # i.e. if self.order_of[neighbor] <= self.order_of[current_vertex], skip
+                  
                         if neighbor in self.order_of and current_vertex in self.order_of:
                             if self.order_of[neighbor] <= self.order_of[current_vertex]:
                                 continue
 
                         old_cost = dist1[neighbor]
-                        # Use 'times_all' or 'linkSet' for cost. We'll use times_all for parity with graph.py
                         if (current_vertex, neighbor) not in self.times_all:
                             continue
                         new_cost = dist1[current_vertex] + self.times_all[(current_vertex, neighbor)]
@@ -316,9 +279,7 @@ class FlowTransportNetwork:
                 else:
                     visited_end.add(current_vertex)
 
-                    # Relax edges backward
                     for neighbor in self.nodeSet[current_vertex].inLinks:
-                        # CH logic: skip neighbor if it's "contracted sooner"
                         if neighbor in self.order_of and current_vertex in self.order_of:
                             if self.order_of[neighbor] <= self.order_of[current_vertex]:
                                 continue
@@ -332,13 +293,11 @@ class FlowTransportNetwork:
                             parents2[neighbor] = current_vertex
                             heapq.heappush(pq_end, (new_cost, neighbor))
 
-        # 4) Identify potential meeting nodes
         reachable_nodes = [v for v in vertices
                         if dist1[v] != math.inf and dist2[v] != math.inf]
         if not reachable_nodes:
             return math.inf, []
 
-        # 5) Find the node that yields minimal dist1[v] + dist2[v]
         shortest_time = math.inf
         common_node = None
         for v in reachable_nodes:
@@ -347,30 +306,23 @@ class FlowTransportNetwork:
                 shortest_time = total_cost
                 common_node = v
 
-        # 6) If for some reason no path found
         if common_node is None:
             return 0.0, []
 
-        # 7) Reconstruct path with potential shortcuts
-        #    We'll do the same two partial paths as in graph.py
-        #    7.1) partial path from source_node -> common_node (using parents1)
-        #         in forward direction
+   
         path1 = []
         cur_node = common_node
         while parents1[cur_node] != cur_node:
             tmp_node = parents1[cur_node]
-            # If there's a shortcut on (tmp_node, cur_node), expand it
             path_fragment = []
             if (tmp_node, cur_node) in self.linkSet and hasattr(self.linkSet[(tmp_node, cur_node)], 'shortcut_node'):
                 if self.linkSet[(tmp_node, cur_node)].shortcut_node != 0:
                     path_fragment = self._generate_shortcut(tmp_node, cur_node)
 
-            # Prepend that fragment, plus the tmp_node
             path1 = path_fragment + path1
             path1 = [tmp_node] + path1
             cur_node = tmp_node
 
-        #    7.2) partial path from common_node -> target_node (using parents2)
         path2 = []
         cur_node = common_node
         while parents2[cur_node] != cur_node:
@@ -384,7 +336,6 @@ class FlowTransportNetwork:
             cur_node = tmp_node
         path2.append(cur_node)
 
-        # Combine
         shortest_path = path1 + path2
 
         return shortest_time, shortest_path
@@ -401,10 +352,8 @@ class FlowTransportNetwork:
                         (including any necessary shortcut expansions)
         """
 
-        # 1) Prepare data structures
         vertices = list(self.nodeSet.keys())
 
-        # --- Reset all node labels/preds to inf/None, exactly like DijkstraHeap does ---
         for n in vertices:
             self.nodeSet[n].label = math.inf
             self.nodeSet[n].pred  = None
@@ -418,22 +367,19 @@ class FlowTransportNetwork:
         dist1 = {v: math.inf for v in vertices}
         dist2 = {v: math.inf for v in vertices}
 
-        # 2) Initialize source/destination
         parents1[source_node] = source_node
         parents2[target_node] = target_node
         dist1[source_node] = 0.0
         dist2[target_node] = 0.0
 
-        # Set the source and target node's label/pred in nodeSet
         self.nodeSet[source_node].label = 0.0
-        self.nodeSet[source_node].pred  = None  # or source_node, if you prefer
+        self.nodeSet[source_node].pred  = None  
         self.nodeSet[target_node].label = 0.0
-        self.nodeSet[target_node].pred  = None  # or target_node
+        self.nodeSet[target_node].pred  = None  
 
         pq_start = [(0.0, source_node)]
         pq_end   = [(0.0, target_node)]
 
-        # 3) Bidirectional search
         while pq_start or pq_end:
             # ---------- Forward Step ----------
             if pq_start:
@@ -443,9 +389,7 @@ class FlowTransportNetwork:
                 else:
                     visited_start.add(current_vertex)
 
-                    # Relax edges forward
                     for neighbor in self.nodeSet[current_vertex].outLinks:
-                        # CH logic: skip neighbor if it's "contracted sooner" or same order
                         if neighbor in self.order_of and current_vertex in self.order_of:
                             if self.order_of[neighbor] <= self.order_of[current_vertex]:
                                 continue
@@ -459,7 +403,6 @@ class FlowTransportNetwork:
                             parents1[neighbor] = current_vertex
                             heapq.heappush(pq_start, (new_cost, neighbor))
 
-                            # --- Update .label and .pred fields in forward direction
                             self.nodeSet[neighbor].label = new_cost
                             self.nodeSet[neighbor].pred  = current_vertex
 
@@ -471,7 +414,6 @@ class FlowTransportNetwork:
                 else:
                     visited_end.add(current_vertex)
 
-                    # Relax edges backward
                     for neighbor in self.nodeSet[current_vertex].inLinks:
                         if neighbor in self.order_of and current_vertex in self.order_of:
                             if self.order_of[neighbor] <= self.order_of[current_vertex]:
@@ -485,18 +427,12 @@ class FlowTransportNetwork:
                             dist2[neighbor] = new_cost
                             parents2[neighbor] = current_vertex
                             heapq.heappush(pq_end, (new_cost, neighbor))
-                            
-                            # Optionally, if you want each node's .label to reflect
-                            # backward expansions, you could set them here. But in practice,
-                            # we rely on forward expansions for final labeling.
-
-        # 4) Identify potential meeting nodes
-        reachable_nodes = [v for v in vertices
+                    
+                    reachable_nodes = [v for v in vertices
                         if dist1[v] != math.inf and dist2[v] != math.inf]
         if not reachable_nodes:
             return math.inf, []
 
-        # 5) Find the node that yields minimal dist1[v] + dist2[v]
         shortest_time = math.inf
         common_node = None
         for v in reachable_nodes:
@@ -505,11 +441,9 @@ class FlowTransportNetwork:
                 shortest_time = total_cost
                 common_node = v
 
-        # 6) If for some reason no path found
         if common_node is None:
             return math.inf, []
 
-        # 7) Reconstruct path with potential shortcuts
         path1 = []
         cur_node = common_node
         while parents1.get(cur_node, cur_node) != cur_node:
@@ -538,8 +472,7 @@ class FlowTransportNetwork:
 
         shortest_path = path1 + path2
 
-        # (Optional) Update all nodeSet[..].label to reflect dist1[..], so all final labels
-        # represent distance from source_node
+
         for v in dist1:
             self.nodeSet[v].label = dist1[v]
 
@@ -559,12 +492,11 @@ class FlowTransportNetwork:
 
         link_obj = self.linkSet[(start_node, end_node)]
         if not hasattr(link_obj, 'shortcut_node'):
-            return []  # no 'shortcut_node' attribute
+            return []  
         shortcut_node = getattr(link_obj, 'shortcut_node', 0)
         if shortcut_node == 0:
             return []
 
-        # Recursively expand
         return (self._generate_shortcut(start_node, shortcut_node) +
                 [shortcut_node] +
                 self._generate_shortcut(shortcut_node, end_node))
@@ -573,9 +505,6 @@ class FlowTransportNetwork:
         """
         Быстро обновляет CH после минимальных изменений в `self.times_all`.
         """
-
-        # # Собираем все затронутые узлы
-        # affected_nodes = set()
 
         newLinkSet = self.linkSet.copy()
         for (u, v) in newLinkSet:
@@ -586,74 +515,7 @@ class FlowTransportNetwork:
 
         self.preprocess()
 
-        # Удаляем затронутые узлы из порядка (переконтракция)
-        # for node in affected_nodes:
-        #     if node in self.order_of:
-        #         del self.node_order[self.order_of[node]]
-        #         del self.order_of[node]
-
-        # # Обновляем очередь приоритетов для затронутых узлов
-        # node_pq = []
-        # for v in affected_nodes:
-        #     dif = self.edge_difference(v)
-        #     heapq.heappush(node_pq, (dif, v))
-
-        # # Переконтракция затронутых узлов
-        # while node_pq:
-        #     _, v = heapq.heappop(node_pq)
-
-        #     # Проверяем разницу перед окончательной контрактой
-        #     new_dif = self.edge_difference(v)
-        #     if node_pq and new_dif > node_pq[0][0]:
-        #         heapq.heappush(node_pq, (new_dif, v))
-        #         continue
-
-        #     # Контрактируем узел
-        #     order = len(self.order_of) + 1
-        #     self.order_of[v] = order
-        #     self.node_order[order] = v
-
-        #     # Создаем сокращенные пути для (u->w) через v
-        #     for u in self.nodeSet[v].inLinks:
-        #         if u in self.order_of:
-        #             continue
-
-        #         P = {}
-        #         for w in self.nodeSet[v].outLinks:
-        #             if w in self.order_of:
-        #                 continue
-        #             if (u, v) not in self.linkSet or (v, w) not in self.linkSet:
-        #                 continue
-        #             P[w] = self.linkSet[(u, v)].cost + self.linkSet[(v, w)].cost
-
-        #         if not P:
-        #             continue
-
-        #         P_max = max(P.values())
-        #         D = self.local_dijkstra_without_v(u, v, P_max)
-
-        #         for w in P.keys():
-        #             if D[w] > P[w]:
-        #                 if (u, w) in self.linkSet:
-        #                     self.linkSet[(u, w)].shortcut_node = v
-        #                 else:
-        #                     self.linkSet[(u, w)] = Link(
-        #                         init_node=u,
-        #                         term_node=w,
-        #                         capacity=999999,
-        #                         length=0,
-        #                         fft=P[w],
-        #                         b=0,
-        #                         power=0,
-        #                         speed_limit=999999,
-        #                         toll=0,
-        #                         linkType='shortcut'
-        #                     )
-        #                     self.linkSet[(u, w)].shortcut_node = v
-
-        #                 self.linkSet[(u, w)].cost = P[w]
-        #                 self.times_all[(u, w)] = P[w]
-    
+   
 
 class Zone:
     def __init__(self, zoneId: str):
@@ -661,7 +523,7 @@ class Zone:
 
         self.lat = 0
         self.lon = 0
-        self.destList = []  # list of zone ids (strs)
+        self.destList = [] 
 
 
 class Node:
@@ -715,9 +577,8 @@ class Link:
         self.flow = 0.0
         self.cost = self.fft
 
-        self.shortcut_node = 0  # Initialize shortcut_node to 0 by default
+        self.shortcut_node = 0 
 
-    # Method not used for assignment
     def modify_capacity(self, delta_percentage: float):
         assert -1 <= delta_percentage <= 1
         self.curr_capacity_percentage += delta_percentage
@@ -768,6 +629,75 @@ def DijkstraHeap(origin, network: FlowTransportNetwork):
                 heapq.heappush(SE, (newLabel, newNode))
                 network.nodeSet[newNode].label = newLabel
                 network.nodeSet[newNode].pred = newPred
+
+def euclidean_distance_to_origin(node_id: str, origin: str, network: FlowTransportNetwork) -> float:
+    """
+    Example heuristic: Euclidean distance from the current node to the 'origin'.
+    This is NOT truly an admissible heuristic for shortest-time or shortest-cost paths
+    unless your cost is purely Euclidean distance.
+
+    For multi-destination usage, this is mostly a placeholder that won't help prune
+    states as A* normally would. If you had a single 'target', you'd measure distance
+    to that 'target' node instead.
+    """
+    lat1, lon1 = network.nodeSet[origin].lat, network.nodeSet[origin].lon
+    lat2, lon2 = network.nodeSet[node_id].lat, network.nodeSet[node_id].lon
+    return math.sqrt((lat2 - lat1)**2 + (lon2 - lon1)**2)
+
+def AStarHeap(origin: str, network: FlowTransportNetwork):
+    """
+    Calculates the shortest path from the 'origin' to all other nodes in the network
+    using an A* approach.  The labels and preds are stored in the node instances:
+        - nodeSet[node_id].label = shortest distance from origin to 'node_id'
+        - nodeSet[node_id].pred  = predecessor node on the path from origin
+
+    NOTE: Because we do not have a single 'target' here, we use a minimal
+    heuristic (Euclidean distance to 'origin' or zero) just to demonstrate
+    the A* structure. For real A*, you'd typically use a 'target' node
+    and an admissible (and consistent) heuristic from each node to that target.
+    """
+
+    for n in network.nodeSet:
+        network.nodeSet[n].label = np.inf
+        network.nodeSet[n].pred = None
+
+    network.nodeSet[origin].label = 0.0
+    network.nodeSet[origin].pred = None
+
+    SE = []
+
+    h_cost_origin = 0  
+    heapq.heappush(SE, (h_cost_origin, origin))
+
+    visited = set()
+
+    while SE:
+        current_f, currentNode = heapq.heappop(SE)
+
+        if currentNode in visited:
+            continue
+        visited.add(currentNode)
+
+        currentLabel = network.nodeSet[currentNode].label
+
+        for toNode in network.nodeSet[currentNode].outLinks:
+            link = (currentNode, toNode)
+            if link not in network.linkSet:
+                continue
+
+            newNode = toNode
+            newPred = currentNode
+            existingLabel = network.nodeSet[newNode].label
+            newLabel = currentLabel + network.linkSet[link].cost
+
+            if newLabel < existingLabel:
+                network.nodeSet[newNode].label = newLabel
+                network.nodeSet[newNode].pred = newPred
+
+                h_cost = euclidean_distance_to_origin(newNode, origin, network)
+                f_cost = newLabel + h_cost
+
+                heapq.heappush(SE, (f_cost, newNode))
 
 def BPRcostFunction(optimal: bool,
                     fft: float,
@@ -834,9 +764,8 @@ def updateTravelTime(network: FlowTransportNetwork, optimal: bool = False, costF
     
     if algo == 'CH':
         network.update_preprocessing()
-
-
-
+    
+  
 def findAlpha(x_bar, network: FlowTransportNetwork, iteration_number, optimal: bool = False, costFunction=BPRcostFunction):
     """
     This uses unconstrained optimization to calculate the optimal step size required
@@ -845,7 +774,7 @@ def findAlpha(x_bar, network: FlowTransportNetwork, iteration_number, optimal: b
 
     def df(alpha):
         assert 0 <= alpha <= 1
-        sum_derivative = 0  # this line is the derivative of the objective function.
+        sum_derivative = 0  
         for l in network.linkSet:
             if (network.linkSet[l].linkType != 'shortcut'):
                 tmpFlow = alpha * x_bar[l] + (1 - alpha) * network.linkSet[l].flow
@@ -860,17 +789,6 @@ def findAlpha(x_bar, network: FlowTransportNetwork, iteration_number, optimal: b
                                     )
                 sum_derivative = sum_derivative + (x_bar[l] - network.linkSet[l].flow) * tmpCost
         return sum_derivative
-
-    # f0 = df(0.0)
-    # f1 = df(1.0)
-
-    # if sign change, do root_scalar
-    # if f0 * f1 < 0:
-    #     sol = scipy.optimize.root_scalar(df, x0=0.5, bracket=(0, 1))
-    #     assert 0 <= sol.root <= 1
-    #     return sol.root
-
-    # return 1 / iteration_number
 
     sol = scipy.optimize.root_scalar(df, x0=np.array([0.5]), bracket=(0, 1))
     assert 0 <= sol.root <= 1
@@ -889,35 +807,6 @@ def tracePreds(dest, network: FlowTransportNetwork):
         prevNode = network.nodeSet[dest].pred
     return spLinks
 
-
-# def loadAON_old(network: FlowTransportNetwork, computeXbar: bool = True):
-#     """
-#     This method produces auxiliary flows for all or nothing loading.
-#     """
-#     x_bar = {l: 0.0 for l in network.linkSet}
-#     SPTT = 0.0
-#     for r in network.originZones:
-#         # DijkstraHeap(origin=r, network=network)
-#         for s in network.zoneSet[r].destList:
-#             dem = network.tripSet[r, s].demand
-
-#             if dem <= 0:
-#                 continue
-
-#             print(f"node set: {network.nodeSet.keys()}")
-#             print(f"source: {r}, target: {s}")
-#             shortest_time, shortest_path = network.bidirectional_dijkstra_CH(s, r)
-#             print(f"shortest_time {shortest_time}, shortest_path: {shortest_path}")
-            
-#             SPTT = SPTT + shortest_time * dem
-        
-#             if computeXbar and r != s:
-#                 for spLink in tracePreds(s, network):
-#                 # for spLink in shortest_path:
-#                     x_bar[spLink] = x_bar[spLink] + dem
-
-#     return SPTT, x_bar
-
 def loadAON_new(network: FlowTransportNetwork, computeXbar: bool = True):
     """
     This method produces auxiliary flows for all or nothing loading,
@@ -929,38 +818,28 @@ def loadAON_new(network: FlowTransportNetwork, computeXbar: bool = True):
          - Accumulate total travel time = shortest_time * demand
          - If computeXbar is True and a path exists, distribute flows on each link in the path
     """
-    # Initialize x_bar to zero for all links
+    
     x_bar = {l: 0.0 for l in network.linkSet if network.linkSet[l].linkType != 'shortcut'}
-    SPTT = 0.0  # Sum of (shortest path travel time * demand)
+    SPTT = 0.0  
 
-    # For every origin r in the network
     for r in network.originZones:
-        # For every destination s in r's zone
         for s in network.zoneSet[r].destList:
             dem = network.tripSet[r, s].demand
             if dem <= 0:
-                continue  # Skip if there's no demand
+                continue  
 
-            # Use the new CH-based shortest path
             shortest_time, shortest_path = network.bidirectional_dijkstra_CH_old(r, s)
 
-            # If there's no path (shortest_path is empty), skip
             if not shortest_path:
                 continue
 
-            # Accumulate total travel time
             SPTT += shortest_time * dem
 
-            # If we want to compute x_bar, assign flow to each link on the path
             if computeXbar and r != s:
-                # Convert the node-based shortest_path into link tuples
                 
                 for i in range(len(shortest_path) - 2, -1, -1):
                     link_tuple = (shortest_path[i], shortest_path[i+1])
                     x_bar[link_tuple] += dem
-
-                    # If your path might include new shortcuts not in linkSet,
-                    # confirm link_tuple is indeed in x_bar (i.e., in linkSet).
 
     return SPTT, x_bar
 
@@ -971,9 +850,13 @@ def loadAON(network: FlowTransportNetwork, algo: str = "dijkstra", computeXbar: 
     SPTT = 0.0
     x_bar = {l: 0.0 for l in network.linkSet if network.linkSet[l].linkType != 'shortcut'}
 
-    if algo == 'dijkstra':
+    if algo == 'dijkstra' or algo == 'A*':
         for r in network.originZones:
-            DijkstraHeap(r, network=network)
+            if algo == 'dijkstra':
+                DijkstraHeap(r, network=network)
+            elif algo == 'A*':
+                AStarHeap(r, network=network)
+
             for s in network.zoneSet[r].destList:
                 dem = network.tripSet[r, s].demand
 
@@ -988,34 +871,26 @@ def loadAON(network: FlowTransportNetwork, algo: str = "dijkstra", computeXbar: 
 
         return SPTT, x_bar
     elif algo == 'CH':
-        # For every origin r in the network
         for r in network.originZones:
-            # For every destination s in r's zone
             for s in network.zoneSet[r].destList:
                 dem = network.tripSet[r, s].demand
                 if dem <= 0:
                     continue  # Skip if there's no demand
 
-                # Use the new CH-based shortest path
-                shortest_time, shortest_path = network.bidirectional_dijkstra_CH_old(r, s)
+                if algo == 'CH':
+                    shortest_time, shortest_path = network.bidirectional_dijkstra_CH_old(r, s)
 
-                # If there's no path (shortest_path is empty), skip
                 if not shortest_path:
                     continue
 
-                # Accumulate total travel time
                 SPTT += shortest_time * dem
 
-                # If we want to compute x_bar, assign flow to each link on the path
                 if computeXbar and r != s:
-                    # Convert the node-based shortest_path into link tuples
                     
-                    for i in range(len(shortest_path) - 2, -1, -1):
-                        link_tuple = (shortest_path[i], shortest_path[i+1])
-                        x_bar[link_tuple] += dem
-
-                        # If your path might include new shortcuts not in linkSet,
-                        # confirm link_tuple is indeed in x_bar (i.e., in linkSet).
+                    if algo == 'CH':
+                        for i in range(len(shortest_path) - 2, -1, -1):
+                            link_tuple = (shortest_path[i], shortest_path[i+1])
+                            x_bar[link_tuple] += dem
 
     return SPTT, x_bar
 
@@ -1052,7 +927,6 @@ def readNetwork(network_df: pd.DataFrame, network: FlowTransportNetwork):
         toll = row["toll"]
         link_type = row["link_type"]
 
-        # Create and store the Link object
         network.linkSet[init_node, term_node] = Link(
             init_node=init_node,
             term_node=term_node,
@@ -1066,19 +940,16 @@ def readNetwork(network_df: pd.DataFrame, network: FlowTransportNetwork):
             linkType=link_type
         )
 
-        # Populate nodeSet if nodes are new
         if init_node not in network.nodeSet:
             network.nodeSet[init_node] = Node(init_node)
         if term_node not in network.nodeSet:
             network.nodeSet[term_node] = Node(term_node)
 
-        # Update outLinks and inLinks
         if term_node not in network.nodeSet[init_node].outLinks:
             network.nodeSet[init_node].outLinks.append(term_node)
         if init_node not in network.nodeSet[term_node].inLinks:
             network.nodeSet[term_node].inLinks.append(init_node)
 
-        # **Populate times_all with edge costs**
         network.times_all[(init_node, term_node)] = free_flow_time
 
 
@@ -1127,10 +998,8 @@ def assignment_loop_new(network: FlowTransportNetwork,
 
     while gap > accuracy:
 
-        # *** Step 1: get x_bar through CH-based AON ***
-        _, x_bar = loadAON(network=network, algo=shortestPathAlgo)  # now uses CH for shortest paths
+        SPTT, x_bar = loadAON(network=network, algo=shortestPathAlgo)  # now uses CH for shortest paths
 
-        # *** Step 2: compute step-size alpha, etc. ***
         if algorithm == "MSA" or iteration_number == 1:
             alpha = (1 / iteration_number)
         elif algorithm == "FW":
@@ -1138,26 +1007,20 @@ def assignment_loop_new(network: FlowTransportNetwork,
         else:
             raise TypeError('Algorithm must be MSA or FW')
 
-        # *** Step 3: update flows ***
         for l in network.linkSet:
             if (network.linkSet[l].linkType != 'shortcut'):
                 network.linkSet[l].flow = alpha * x_bar[l] + (1 - alpha) * network.linkSet[l].flow
 
-        # *** Step 4: update link costs ***
         updateTravelTime(network=network, optimal=systemOptimal, costFunction=costFunction, algo=shortestPathAlgo)
 
-        # *** Step 5: compute gap ***
-        SPTT, _ = loadAON(network=network, algo=shortestPathAlgo, computeXbar=False)  # CH-based shortest paths again
         SPTT = round(SPTT, 9)
         TSTT = round(sum([network.linkSet[a].flow * network.linkSet[a].cost for a in network.linkSet if network.linkSet[a].linkType != 'shortcut']), 9)
         gap = (TSTT / SPTT) - 1
 
-        # *** check for errors or termination ***
         if gap < 0:
             print("Error, negative gap encountered. TSTT < SPTT?")
 
         iteration_number += 1
-        # (stop if iteration_number > maxIter or time > maxTime, etc.)
 
     return TSTT
 
@@ -1215,17 +1078,14 @@ def assignment_loop(network: FlowTransportNetwork,
     assignmentStartTime = time.time()
 
     lastLinkSet = network.linkSet.copy()
-    # Check if desired accuracy is reached
-    while gap > accuracy:
-        # network.preprocess()
 
-        # Get x_bar throug all-or-nothing assignment
+    while gap > accuracy:
+
         _, x_bar = loadAON(network=network, algo=shortestPathAlgo)
 
         if algorithm == "MSA" or iteration_number == 1:
             alpha = (1 / iteration_number)
         elif algorithm == "FW":
-            # If using Frank-Wolfe determine the step size alpha by solving a nonlinear equation
             alpha = findAlpha(x_bar,
                               network=network,
                               optimal=systemOptimal,
@@ -1235,18 +1095,15 @@ def assignment_loop(network: FlowTransportNetwork,
             print("The solution algorithm ", algorithm, " does not exist!")
             raise TypeError('Algorithm must be MSA or FW')
 
-        # Apply flow improvement
         for l in network.linkSet:
             if (network.linkSet[l].linkType != 'shortcut'):
                 network.linkSet[l].flow = alpha * x_bar[l] + (1 - alpha) * network.linkSet[l].flow
 
-        # Compute the new travel time
         updateTravelTime(network=network,
                          optimal=systemOptimal,
                          costFunction=costFunction, algo=shortestPathAlgo)
         
 
-        # Compute the relative gap
         SPTT, _ = loadAON(network=network, algo=shortestPathAlgo, computeXbar=False)
         SPTT = round(SPTT, 9)
         TSTT = round(sum([network.linkSet[a].flow * network.linkSet[a].cost for a in
@@ -1254,19 +1111,11 @@ def assignment_loop(network: FlowTransportNetwork,
 
         gap = (TSTT / SPTT) - 1
         print(TSTT, SPTT, "TSTT, SPTT, Max capacity", max([l.capacity for l in network.linkSet.values()]), gap)
-        # print("linkSet diff:", set(lastLinkSet.keys()) - set(network.linkSet.keys()))
-        # lastLinkSet = network.linkSet.copy()
 
         if gap < 0:
             print("Error, gap is less than 0, this should not happen")
             print("TSTT", "SPTT", TSTT, SPTT)
 
-            # Uncomment for debug
-
-            # print("Capacities:", [l.capacity for l in network.linkSet.values()])
-            # print("Flows:", [l.flow for l in network.linkSet.values()])
-
-        # Compute the real total travel time (which in the case of system optimal rounting is different from the TSTT above)
         TSTT = get_TSTT(network=network, costFunction=costFunction)
 
         iteration_number += 1
@@ -1287,7 +1136,6 @@ def assignment_loop(network: FlowTransportNetwork,
     if verbose:
         print("Assignment converged in ", iteration_number, "iterations")
         print("Assignment took", round(time.time() - assignmentStartTime, 5), "seconds")
-        print("Current gap:", round(gap, 5))
 
     return TSTT
 
@@ -1341,45 +1189,11 @@ def computeAssingment(net_file: str,
                       shortestPathAlgo: str = 'dijkstra'
                       ) -> float:
 
-    # 1) Load the network from your data
     network = load_network(net_file=net_file, 
                            demand_file=demand_file, 
                            verbose=verbose, 
                            force_net_reprocess=force_net_reprocess)
 
-    # source = "1"
-    # target = "22"
-    # print(f"Start. nodeset: {network.nodeSet.keys()}")
-    # time, path = network.bidirectional_dijkstra_CH_old(source, target)
-    # pairs = [(str(i), str(j)) for i in range(1, 25) for j in range(1, 25) if i != j]
-    # print(f"Total number of pairs: {len(pairs)}")
-    # cnt = 0
-    # for pair in pairs:
-    #     timeCh, pathCh = network.bidirectional_dijkstra_CH_old(pair[0], pair[1])
-
-    #     linksCh = []
-    #     for i in range(len(pathCh) - 2, -1, -1):
-    #         link_tuple = (pathCh[i], pathCh[i+1])
-    #         linksCh.append(link_tuple)
-
-    #     DijkstraHeap(pair[0], network)
-    #     timeD, pathD = network.nodeSet[pair[1]].label, tracePreds(dest=pair[1], network=network)
-
-    #     if (linksCh != pathD):
-    #         print(f"src: {pair[0]}, target: {pair[1]}")
-    #         print(f"Ch time: {timeCh}, dijkstra time: {timeD}")
-    #         print(f"Ch path: {linksCh}, dijkstra path: {pathD}")
-    #         cnt += 1
-            
-    # print(f"Miss count: {cnt}")
-
-
-    # DijkstraHeap(source, network)
-    # print(f"Start Dijkstra. time: {network.nodeSet["7"].label}, path: {tracePreds(target, network)}")
-
-
-
-    # 2) Preprocess the network (create shortcuts, contract nodes, etc.)
     if verbose:
         print("Preprocessing the network...")
     t = time.time()
@@ -1388,10 +1202,6 @@ def computeAssingment(net_file: str,
     if shortestPathAlgo == 'CH':
         network.preprocess()
 
-    # Optional: Recalculate link costs if needed to ensure consistency 
-    # updateTravelTime(network=network, costFunction=costFunction)
-
-    # 3) Run the assignment loop on the updated network
     if verbose:
         print("Running assignment loop on the preprocessed network...")
     TSTT = assignment_loop(network=network,
@@ -1404,7 +1214,6 @@ def computeAssingment(net_file: str,
                            verbose=verbose, 
                            shortestPathAlgo=shortestPathAlgo)
 
-    # 4) Write results
     if results_file is None:
         results_file = '_'.join(net_file.split("_")[:-1] + ["flow.tntp"])
     writeResults(network=network,
@@ -1415,12 +1224,35 @@ def computeAssingment(net_file: str,
 
     return TSTT
 
+
+def draw_and_save_graph(G, filename="graph.png", figsize=(8, 6), node_color='lightblue', edge_color='gray', node_size=3000, font_size=15):
+    """
+    Draws a NetworkX graph (directed or undirected), saves it as an image, and displays it.
+
+    Parameters:
+    - G (networkx.Graph): The graph to draw (can be directed or undirected).
+    - filename (str): The name of the file to save the graph image (default: "graph.png").
+    - figsize (tuple): Size of the figure (default: (8, 6)).
+    - node_color (str): Color of the nodes (default: 'lightblue').
+    - edge_color (str): Color of the edges (default: 'gray').
+    - node_size (int): Size of the nodes (default: 3000).
+    - font_size (int): Font size for labels (default: 15).
+    """
+    plt.figure(figsize=figsize)
+    nx.draw(G, with_labels=True, node_color=node_color, edge_color=edge_color, node_size=node_size, font_size=font_size, arrows=True)
+    
+    plt.savefig(filename)
+    print(f"Graph saved as {filename}")
+    
+    # plt.show()
+
 if __name__ == '__main__':
 
     # This is an example usage for calculating System Optimal and User Equilibrium with Frank-Wolfe
 
-    net_file = str(PathUtils.barcelona_net_file)
+    net_file = str(PathUtils.berlin_center_net_file)
 
+    print("\nSystem Optimal\n")
     total_system_travel_time_optimal = computeAssingment(net_file=net_file,
                                                          algorithm="FW",
                                                          costFunction=BPRcostFunction,
@@ -1429,8 +1261,8 @@ if __name__ == '__main__':
                                                          accuracy=0.01,
                                                          maxIter=100000,
                                                          maxTime=6000000, 
-                                                         shortestPathAlgo='CH')
-
+                                                         shortestPathAlgo='A*')
+    print("\nUser Equilibrium\n")
     total_system_travel_time_equilibrium = computeAssingment(net_file=net_file,
                                                              algorithm="FW",
                                                              costFunction=BPRcostFunction,
@@ -1439,6 +1271,9 @@ if __name__ == '__main__':
                                                              accuracy=0.01,
                                                              maxIter=100000,
                                                              maxTime=6000000, 
-                                                             shortestPathAlgo='CH')
+                                                             shortestPathAlgo='A*')
 
-    print("UE - SO = ", total_system_travel_time_equilibrium - total_system_travel_time_optimal)
+    print("UE", total_system_travel_time_equilibrium)
+    print("SO", total_system_travel_time_optimal)
+
+    # print("UE - SO = ", total_system_travel_time_equilibrium - total_system_travel_time_optimal)
